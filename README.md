@@ -15,7 +15,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/zviratkos/esphome-gdey042z98
-      ref: 1.0.1
+      ref: v1.0.2
     components: [gdey042z98]
 
 time:
