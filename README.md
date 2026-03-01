@@ -80,9 +80,9 @@ display:
     cs_pin: GPIO10         # Chip Select
     dc_pin: GPIO48         # Data/Command
     reset_pin: GPIO45      # Reset
-    busy_pin: GPIO38       # Busy (HIGH = zaneprázdněn)
-    power_pin: GPIO47      # spínač napájení displeje
-    update_interval: 60s   # e-ink se neaktualizuje moc často
+    busy_pin: GPIO38       # Busy (HIGH = busy)
+    power_pin: GPIO47      # Power on/off PIN
+    update_interval: 60s   # Update interval of diplay
     lambda: |-
       // White background
       it.fill(color_white);
@@ -92,7 +92,7 @@ display:
       if (now.is_valid()) {
         // Days names
         const char* dny[] = {
-          "Sunday", "Monday", "Tuesday", "Wednesday",
+          "", "Sunday", "Monday", "Tuesday", "Wednesday",
           "Thursday", "Friday", "Saturday"
         };
         // Month names
