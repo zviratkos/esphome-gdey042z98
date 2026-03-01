@@ -15,8 +15,13 @@ external_components:
   - source:
       type: git
       url: https://github.com/zviratkos/esphome-gdey042z98
-      ref: main
+      ref: 1.0.1
     components: [gdey042z98]
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    timezone: "Europe/Prague"
 
 # -----------------------------
 # SPI bus - set pins based on ESPink available
@@ -76,7 +81,7 @@ display:
     dc_pin: GPIO48         # Data/Command
     reset_pin: GPIO45      # Reset
     busy_pin: GPIO38       # Busy (HIGH = busy)
-    power_pin: GPIO47      # power on/off PIN
+    power_pin: GPIO47      # Power on/off PIN
     update_interval: 60s   # Update interval of diplay
     lambda: |-
       // White background
@@ -85,15 +90,15 @@ display:
       // ── Date ──────────────────────────────────────────────
       auto now = id(ha_time).now();
       if (now.is_valid()) {
-        // Days
+        // Days names
         const char* dny[] = {
-          "Sunday", "Monday", "Tuesday", "Wednesday",
+          "", "Sunday", "Monday", "Tuesday", "Wednesday",
           "Thursday", "Friday", "Saturday"
         };
-        // Months
+        // Month names
         const char* mesice[] = {
           "", "January", "February", "March", "April", "May", "June",
-          "July", "August", "September", "October", "November", "December"
+          "July", "August", "September", "October", "November", "December"        
         };
 
         it.printf(
@@ -101,10 +106,10 @@ display:
           id(font_date),
           color_red,
           TextAlign::TOP_CENTER,
-          "%s %d. %s %d",
+          "%s, %s %d, %d",
           dny[now.day_of_week],
-          now.day_of_month,
           mesice[now.month],
+          now.day_of_month,
           now.year
         );
 
@@ -118,8 +123,8 @@ display:
           now.hour,
           now.minute
         );
+      } else {
+        it.printf(200, 10, id(font_date), color_red, TextAlign::TOP_CENTER, "Loading...");
+        it.printf(200, 38, id(font_time), color_black, TextAlign::TOP_CENTER, "--:--");
       }
 
-```
-
-### License MIT
