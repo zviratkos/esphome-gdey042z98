@@ -36,24 +36,7 @@ void GDEY042Z98::hw_reset_() {
 }
 
 // ---------------------------------------------------------------------------
-// Napájení displeje
-// ---------------------------------------------------------------------------
-
-void GDEY042Z98::power_on_() {
-  if (this->power_pin_ == nullptr) return;
-  this->power_pin_->digital_write(true);
-  delay(100);
-  ESP_LOGD(TAG, "Napájení displeje: ON");
-}
-
-void GDEY042Z98::power_off_() {
-  if (this->power_pin_ == nullptr) return;
-  this->power_pin_->digital_write(false);
-  ESP_LOGD(TAG, "Napájení displeje: OFF");
-}
-
-// ---------------------------------------------------------------------------
-// set_partial_ram_area_ – nastavuje data entry mode, oblast RAM i ukazatel
+// set_partial_ram_area_
 // ---------------------------------------------------------------------------
 
 void GDEY042Z98::set_partial_ram_area_(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
@@ -75,22 +58,96 @@ void GDEY042Z98::set_partial_ram_area_(uint16_t x, uint16_t y, uint16_t w, uint1
 }
 
 // ---------------------------------------------------------------------------
-// Inicializace displeje – dle GxEPD2 _InitDisplay pro GDEY042Z98
+// initialize_display_ – HW reset + SW reset + základní konfigurace
+// Obsahuje delay(10) – volat pouze z POWERING_ON stavu v loop()
+// kde už víme že napájení je stabilní
 // ---------------------------------------------------------------------------
 
 void GDEY042Z98::initialize_display_() {
   this->hw_reset_();
   this->send_command_(0x12);  // SW reset
   delay(10);
-  this->send_command_(0x01);  // driver output control
+  this->send_command_(0x01);
   this->send_data_((GDEY042Z98_HEIGHT - 1) % 256);
   this->send_data_((GDEY042Z98_HEIGHT - 1) / 256);
   this->send_data_(0x00);
-  this->send_command_(0x3C);  // border waveform
+  this->send_command_(0x3C);
   this->send_data_(0x05);
-  this->send_command_(0x18);  // interní teplotní senzor
+  this->send_command_(0x18);
   this->send_data_(0x80);
   this->set_partial_ram_area_(0, 0, GDEY042Z98_WIDTH, GDEY042Z98_HEIGHT);
+}
+
+// ---------------------------------------------------------------------------
+// do_send_() – přenos dat do RAM displeje a spuštění refreshe
+// ---------------------------------------------------------------------------
+
+void GDEY042Z98::do_send_() {
+  if (this->refresh_type_ == RefreshType::FULL) {
+    // B/W buffer – celá plocha
+    this->set_partial_ram_area_(0, 0, GDEY042Z98_WIDTH, GDEY042Z98_HEIGHT);
+    this->send_command_(0x24);
+    this->dc_pin_->digital_write(true);
+    this->enable();
+    for (size_t i = 0; i < BUFFER_SIZE; i++)
+      this->transfer_byte(this->bw_buffer_[i]);
+    this->disable();
+
+    // Červený buffer (invertovaný)
+    this->set_partial_ram_area_(0, 0, GDEY042Z98_WIDTH, GDEY042Z98_HEIGHT);
+    this->send_command_(0x26);
+    this->dc_pin_->digital_write(true);
+    this->enable();
+    for (size_t i = 0; i < BUFFER_SIZE; i++)
+      this->transfer_byte(~this->red_buffer_[i]);
+    this->disable();
+
+    // Full refresh
+    this->send_command_(0x22);
+    this->send_data_(0xF7);
+    this->send_command_(0x20);
+    ESP_LOGD(TAG, "Full refresh spuštěn...");
+
+  } else {
+    // Partial – pouze výřez B/W bufferu
+    uint16_t x = this->partial_x_;
+    uint16_t y = this->partial_y_;
+    uint16_t w = this->partial_w_;
+    uint16_t h = this->partial_h_;
+
+    // Poslat do current RAM (0x24)
+    this->set_partial_ram_area_(x, y, w, h);
+    this->send_command_(0x24);
+    this->dc_pin_->digital_write(true);
+    this->enable();
+    for (uint16_t row = y; row < y + h; row++) {
+      for (uint16_t col = x; col < x + w; col += 8) {
+        size_t byte_idx = (row * (GDEY042Z98_WIDTH / 8)) + (col / 8);
+        this->transfer_byte(this->bw_buffer_[byte_idx]);
+      }
+    }
+    this->disable();
+
+    // Poslat také do previous RAM (0x26) – SSD1683 potřebuje obě pro partial update
+    this->set_partial_ram_area_(x, y, w, h);
+    this->send_command_(0x26);
+    this->dc_pin_->digital_write(true);
+    this->enable();
+    for (uint16_t row = y; row < y + h; row++) {
+      for (uint16_t col = x; col < x + w; col += 8) {
+        size_t byte_idx = (row * (GDEY042Z98_WIDTH / 8)) + (col / 8);
+        this->transfer_byte(this->bw_buffer_[byte_idx]);
+      }
+    }
+    this->disable();
+
+    // Partial refresh
+    this->send_command_(0x22);
+    this->send_data_(0xC7);
+    this->send_command_(0x20);
+    ESP_LOGD(TAG, "Partial refresh spuštěn (x=%d y=%d w=%d h=%d)...",
+             x, y, w, h);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -106,15 +163,13 @@ void GDEY042Z98::setup() {
   }
   if (this->busy_pin_ != nullptr)
     this->busy_pin_->setup();
-  if (this->power_pin_ != nullptr)
+  if (this->power_pin_ != nullptr) {
     this->power_pin_->setup();
+    this->power_pin_->digital_write(false);
+  }
 
   memset(this->bw_buffer_,  0xFF, BUFFER_SIZE);
   memset(this->red_buffer_, 0xFF, BUFFER_SIZE);
-
-  this->power_on_();
-  this->initialize_display_();
-  this->power_off_();
 
   ESP_LOGD(TAG, "GDEY042Z98 inicializován");
 }
@@ -155,7 +210,7 @@ void GDEY042Z98::draw_absolute_pixel_internal(int x, int y, Color color) {
 }
 
 // ---------------------------------------------------------------------------
-// update() – full refresh (B/W + červená), neblokuje
+// update() – spustí full refresh, neblokuje
 // ---------------------------------------------------------------------------
 
 void GDEY042Z98::update() {
@@ -163,42 +218,20 @@ void GDEY042Z98::update() {
     ESP_LOGW(TAG, "Refresh stále probíhá, přeskakuji update");
     return;
   }
+  this->do_update_();  // naplní framebuffer přes lambdu
+  this->refresh_type_ = RefreshType::FULL;
 
-  this->power_on_();
-  this->initialize_display_();
-  this->do_update_();  // zavolá lambda writer
+  // Zapnout napájení – zbytek řeší loop()
+  if (this->power_pin_ != nullptr)
+    this->power_pin_->digital_write(true);
 
-  // B/W buffer – celá plocha
-  this->set_partial_ram_area_(0, 0, GDEY042Z98_WIDTH, GDEY042Z98_HEIGHT);
-  this->send_command_(0x24);
-  this->dc_pin_->digital_write(true);
-  this->enable();
-  for (size_t i = 0; i < BUFFER_SIZE; i++)
-    this->transfer_byte(this->bw_buffer_[i]);
-  this->disable();
-
-  // Červený buffer (invertovaný) – celá plocha
-  this->set_partial_ram_area_(0, 0, GDEY042Z98_WIDTH, GDEY042Z98_HEIGHT);
-  this->send_command_(0x26);
-  this->dc_pin_->digital_write(true);
-  this->enable();
-  for (size_t i = 0; i < BUFFER_SIZE; i++)
-    this->transfer_byte(~this->red_buffer_[i]);
-  this->disable();
-
-  // Full refresh
-  this->send_command_(0x22);
-  this->send_data_(0xF7);
-  this->send_command_(0x20);
-
-  this->current_refresh_is_partial_ = false;
-  this->refresh_state_ = RefreshState::WAITING;
-  this->busy_start_ms_ = millis();
-  ESP_LOGD(TAG, "Full refresh spuštěn...");
+  this->refresh_state_ = RefreshState::POWERING_ON;
+  this->state_start_ms_ = millis();
+  ESP_LOGD(TAG, "Napájení ON, čekám na stabilizaci...");
 }
 
 // ---------------------------------------------------------------------------
-// partial_update() – překreslí jen zadanou oblast, pouze B/W (~1s)
+// partial_update() – spustí partial refresh, neblokuje
 // ---------------------------------------------------------------------------
 
 void GDEY042Z98::partial_update(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
@@ -207,84 +240,90 @@ void GDEY042Z98::partial_update(uint16_t x, uint16_t y, uint16_t w, uint16_t h) 
     return;
   }
 
-  // Zarovnat x a w na byte boundary (násobek 8)
+  // Zarovnat na byte boundary
   x = x & 0xFFF8;
   w = (w + 7) & 0xFFF8;
-
-  // Oříznout na rozměry displeje
   if (x + w > GDEY042Z98_WIDTH)  w = GDEY042Z98_WIDTH - x;
   if (y + h > GDEY042Z98_HEIGHT) h = GDEY042Z98_HEIGHT - y;
 
-  ESP_LOGD(TAG, "Partial update oblast: x=%d y=%d w=%d h=%d", x, y, w, h);
+  this->do_update_();  // naplní framebuffer přes lambdu
+  this->refresh_type_ = RefreshType::PARTIAL;
+  this->partial_x_ = x;
+  this->partial_y_ = y;
+  this->partial_w_ = w;
+  this->partial_h_ = h;
 
-  this->power_on_();
-  this->initialize_display_();
-  this->do_update_();  // překresli celý framebuffer (lambda), pak pošleme jen výřez
+  // Zapnout napájení – zbytek řeší loop()
+  if (this->power_pin_ != nullptr)
+    this->power_pin_->digital_write(true);
 
-  // Poslat pouze výřez B/W bufferu
-  this->set_partial_ram_area_(x, y, w, h);
-  this->send_command_(0x24);
-  this->dc_pin_->digital_write(true);
-  this->enable();
-  for (uint16_t row = y; row < y + h; row++) {
-    for (uint16_t col = x; col < x + w; col += 8) {
-      size_t byte_idx = (row * (GDEY042Z98_WIDTH / 8)) + (col / 8);
-      this->transfer_byte(this->bw_buffer_[byte_idx]);
-    }
-  }
-  this->disable();
-
-  // Partial refresh – rychlý, jen B/W
-  this->send_command_(0x22);
-  this->send_data_(0xC7);  // 0xC7 = partial/fast refresh (bez červené LUT)
-  this->send_command_(0x20);
-
-  this->current_refresh_is_partial_ = true;
-  this->refresh_state_ = RefreshState::WAITING;
-  this->busy_start_ms_ = millis();
-  ESP_LOGD(TAG, "Partial refresh spuštěn...");
+  this->refresh_state_ = RefreshState::POWERING_ON;
+  this->state_start_ms_ = millis();
 }
 
 // ---------------------------------------------------------------------------
-// loop() – neblokující čekání na dokončení refreshe
+// loop() – plně neblokující state machine
 // ---------------------------------------------------------------------------
 
 void GDEY042Z98::loop() {
-  if (this->refresh_state_ != RefreshState::WAITING)
-    return;
+  switch (this->refresh_state_) {
 
-  // Timeout – partial max 5s, full max 30s
-  uint32_t timeout = this->current_refresh_is_partial_ ? 5000 : 30000;
+    case RefreshState::IDLE:
+      return;
 
-  if (this->busy_pin_ == nullptr) {
-    if (millis() - this->busy_start_ms_ > timeout) {
-      this->send_command_(0x10);
+    case RefreshState::POWERING_ON:
+      // Čekej 100ms na stabilizaci napájení – neblokuje!
+      if (millis() - this->state_start_ms_ < 100)
+        return;
+      // Napájení stabilní – inicializuj a pošli data
+      this->initialize_display_();
+      this->do_send_();
+      this->refresh_state_ = RefreshState::WAITING;
+      this->state_start_ms_ = millis();
+      return;
+
+    case RefreshState::WAITING: {
+      uint32_t timeout = (this->refresh_type_ == RefreshType::PARTIAL) ? 5000 : 30000;
+
+      if (this->busy_pin_ == nullptr) {
+        if (millis() - this->state_start_ms_ > timeout) {
+          this->send_command_(0x10);
+          this->send_data_(0x11);
+          if (this->power_pin_ != nullptr)
+            this->power_pin_->digital_write(false);
+          this->refresh_state_ = RefreshState::IDLE;
+          ESP_LOGD(TAG, "Refresh dokončen (bez BUSY pinu)");
+        }
+        return;
+      }
+
+      if (this->busy_pin_->digital_read()) {
+        // Stále zaneprázdněn
+        if (millis() - this->state_start_ms_ > timeout) {
+          ESP_LOGE(TAG, "Timeout čekání na BUSY");
+          if (this->power_pin_ != nullptr)
+            this->power_pin_->digital_write(false);
+          this->refresh_state_ = RefreshState::IDLE;
+        }
+        return;
+      }
+
+      // BUSY LOW – hotovo
+      uint32_t elapsed = millis() - this->state_start_ms_;
+      ESP_LOGD(TAG, "%s refresh dokončen za %lu ms",
+        this->refresh_type_ == RefreshType::PARTIAL ? "Partial" : "Full", elapsed);
+
+      this->send_command_(0x10);  // deep sleep
       this->send_data_(0x11);
-      this->power_off_();
+      if (this->power_pin_ != nullptr)
+        this->power_pin_->digital_write(false);
       this->refresh_state_ = RefreshState::IDLE;
-      ESP_LOGD(TAG, "Refresh dokončen (bez BUSY pinu)");
+      return;
     }
-    return;
+
+    default:
+      return;
   }
-
-  if (this->busy_pin_->digital_read()) {
-    if (millis() - this->busy_start_ms_ > timeout) {
-      ESP_LOGE(TAG, "Timeout čekání na BUSY");
-      this->refresh_state_ = RefreshState::IDLE;
-      this->power_off_();
-    }
-    return;
-  }
-
-  // BUSY LOW – hotovo
-  uint32_t elapsed = millis() - this->busy_start_ms_;
-  ESP_LOGD(TAG, "%s refresh dokončen za %lu ms",
-    this->current_refresh_is_partial_ ? "Partial" : "Full", elapsed);
-
-  this->send_command_(0x10);  // deep sleep
-  this->send_data_(0x11);
-  this->power_off_();
-  this->refresh_state_ = RefreshState::IDLE;
 }
 
 }  // namespace gdey042z98
