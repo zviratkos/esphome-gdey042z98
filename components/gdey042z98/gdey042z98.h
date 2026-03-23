@@ -14,8 +14,8 @@ static const uint16_t GDEY042Z98_WIDTH  = 400;
 static const uint16_t GDEY042Z98_HEIGHT = 300;
 
 enum class RefreshState {
-  IDLE,         // klidový stav
-  WAITING,      // čekáme až BUSY půjde LOW po refreshi
+  IDLE,
+  WAITING,
 };
 
 class GDEY042Z98 : public display::DisplayBuffer,
@@ -28,6 +28,10 @@ class GDEY042Z98 : public display::DisplayBuffer,
   void dump_config() override;
   void update() override;
   void loop() override;
+
+  // Partial update – překreslí jen zadanou oblast (pouze B/W, bez červené)
+  // x, y musí být zarovnány na 8px (byte boundary)
+  void partial_update(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 
   void set_dc_pin(GPIOPin *pin)    { dc_pin_ = pin; }
   void set_reset_pin(GPIOPin *pin) { reset_pin_ = pin; }
@@ -49,6 +53,7 @@ class GDEY042Z98 : public display::DisplayBuffer,
   void power_on_();
   void power_off_();
   void set_partial_ram_area_(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
+  void finish_refresh_(bool is_partial);
 
   GPIOPin *dc_pin_{nullptr};
   GPIOPin *reset_pin_{nullptr};
@@ -57,6 +62,7 @@ class GDEY042Z98 : public display::DisplayBuffer,
 
   RefreshState refresh_state_{RefreshState::IDLE};
   uint32_t busy_start_ms_{0};
+  bool current_refresh_is_partial_{false};
 
   static const size_t BUFFER_SIZE = (GDEY042Z98_WIDTH * GDEY042Z98_HEIGHT) / 8;
   uint8_t bw_buffer_[BUFFER_SIZE];
