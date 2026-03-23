@@ -141,9 +141,10 @@ void GDEY042Z98::do_send_() {
     }
     this->disable();
 
-    // Partial refresh
+    // Partial refresh – použijeme 0xF7 (stejný jako full) pro test
+    // pokud toto funguje, problém byl v 0xC7
     this->send_command_(0x22);
-    this->send_data_(0xC7);
+    this->send_data_(0xF7);
     this->send_command_(0x20);
     ESP_LOGD(TAG, "Partial refresh spuštěn (x=%d y=%d w=%d h=%d)...",
              x, y, w, h);
