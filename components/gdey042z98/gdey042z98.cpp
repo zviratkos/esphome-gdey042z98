@@ -119,7 +119,20 @@ void GDEY042Z98::do_send_() {
     uint16_t w = this->partial_w_;
     uint16_t h = this->partial_h_;
 
-    // Poslat nový obsah do current RAM (0x24)
+    // 1. Nejdřív previous RAM (0x26) – správné pořadí dle datasheetu
+    this->set_partial_ram_area_(x, y, w, h);
+    this->send_command_(0x26);
+    this->dc_pin_->digital_write(true);
+    this->enable();
+    for (uint16_t row = y; row < y + h; row++) {
+      for (uint16_t col = x; col < x + w; col += 8) {
+        size_t byte_idx = (row * (GDEY042Z98_WIDTH / 8)) + (col / 8);
+        this->transfer_byte(this->bw_buffer_[byte_idx]);
+      }
+    }
+    this->disable();
+
+    // 2. Pak current RAM (0x24)
     this->set_partial_ram_area_(x, y, w, h);
     this->send_command_(0x24);
     this->dc_pin_->digital_write(true);
@@ -132,20 +145,7 @@ void GDEY042Z98::do_send_() {
     }
     this->disable();
 
-    // Poslat stejný obsah do previous RAM (0x26) – bez inverze, jen B/W
-    this->set_partial_ram_area_(x, y, w, h);
-    this->send_command_(0x26);
-    this->dc_pin_->digital_write(true);
-    this->enable();
-    for (uint16_t row = y; row < y + h; row++) {
-      for (uint16_t col = x; col < x + w; col += 8) {
-        size_t byte_idx = (row * (GDEY042Z98_WIDTH / 8)) + (col / 8);
-        this->transfer_byte(this->bw_buffer_[byte_idx]);  // stejná data, bez inverze
-      }
-    }
-    this->disable();
-
-    // Partial B/W refresh – 0xC7
+    // Partial B/W refresh
     this->send_command_(0x22);
     this->send_data_(0xC7);
     this->send_command_(0x20);
