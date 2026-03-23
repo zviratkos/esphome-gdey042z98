@@ -119,17 +119,7 @@ void GDEY042Z98::do_send_() {
     uint16_t w = this->partial_w_;
     uint16_t h = this->partial_h_;
 
-    // 1. Previous RAM (0x26) – 0xFF = žádná červená
-    this->set_partial_ram_area_(x, y, w, h);
-    this->send_command_(0x26);
-    this->dc_pin_->digital_write(true);
-    this->enable();
-    for (uint16_t row = y; row < y + h; row++)
-      for (uint16_t col = x; col < x + w; col += 8)
-        this->transfer_byte(0xFF);
-    this->disable();
-
-    // 2. Current RAM (0x24) – nový B/W obsah
+    // Pouze current RAM (0x24) – 0xDC nepotřebuje previous RAM
     this->set_partial_ram_area_(x, y, w, h);
     this->send_command_(0x24);
     this->dc_pin_->digital_write(true);
@@ -144,7 +134,7 @@ void GDEY042Z98::do_send_() {
 
     // Refresh
     this->send_command_(0x22);
-    this->send_data_(0xF4);
+    this->send_data_(0xDC);  // refresh_bw dle GxEPD2 – rychlý B/W bez červené
     this->send_command_(0x20);
     ESP_LOGD(TAG, "Partial refresh spuštěn (x=%d y=%d w=%d h=%d)...",
              x, y, w, h);
