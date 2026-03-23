@@ -23,11 +23,6 @@ GDEY042Z98 = gdey042z98_ns.class_(
     cg.Component,
 )
 
-# Action pro partial update
-PartialUpdateAction = gdey042z98_ns.class_(
-    "PartialUpdateAction", cg.Action
-)
-
 CONFIG_SCHEMA = (
     display.FULL_DISPLAY_SCHEMA.extend(
         {
