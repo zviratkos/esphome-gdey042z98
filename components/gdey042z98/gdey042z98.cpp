@@ -64,9 +64,13 @@ void GDEY042Z98::set_partial_ram_area_(uint16_t x, uint16_t y, uint16_t w, uint1
 // ---------------------------------------------------------------------------
 
 void GDEY042Z98::initialize_display_() {
+  // Pouze HW reset + SW reset – zbytek konfigurace až po BUSY LOW v loop()
   this->hw_reset_();
-  this->send_command_(0x12);  // SW reset
-  delay(10);
+  this->send_command_(0x12);  // SW reset – displej bude BUSY HIGH po dobu resetu
+}
+
+void GDEY042Z98::configure_display_() {
+  // Konfigurace po SW resetu – volat až když BUSY LOW
   this->send_command_(0x01);
   this->send_data_((GDEY042Z98_HEIGHT - 1) % 256);
   this->send_data_((GDEY042Z98_HEIGHT - 1) / 256);
@@ -115,34 +119,15 @@ void GDEY042Z98::do_send_() {
     uint16_t w = this->partial_w_;
     uint16_t h = this->partial_h_;
 
-    // Poslat do current RAM (0x24)
-    this->set_partial_ram_area_(x, y, w, h);
+    // DIAGNOSTIKA: poslat celý B/W buffer (celá plocha) bez červené
+    this->set_partial_ram_area_(0, 0, GDEY042Z98_WIDTH, GDEY042Z98_HEIGHT);
     this->send_command_(0x24);
     this->dc_pin_->digital_write(true);
     this->enable();
-    for (uint16_t row = y; row < y + h; row++) {
-      for (uint16_t col = x; col < x + w; col += 8) {
-        size_t byte_idx = (row * (GDEY042Z98_WIDTH / 8)) + (col / 8);
-        this->transfer_byte(this->bw_buffer_[byte_idx]);
-      }
-    }
+    for (size_t i = 0; i < BUFFER_SIZE; i++)
+      this->transfer_byte(this->bw_buffer_[i]);
     this->disable();
 
-    // Poslat také do previous RAM (0x26) – SSD1683 potřebuje obě pro partial update
-    this->set_partial_ram_area_(x, y, w, h);
-    this->send_command_(0x26);
-    this->dc_pin_->digital_write(true);
-    this->enable();
-    for (uint16_t row = y; row < y + h; row++) {
-      for (uint16_t col = x; col < x + w; col += 8) {
-        size_t byte_idx = (row * (GDEY042Z98_WIDTH / 8)) + (col / 8);
-        this->transfer_byte(this->bw_buffer_[byte_idx]);
-      }
-    }
-    this->disable();
-
-    // Partial refresh – použijeme 0xF7 (stejný jako full) pro test
-    // pokud toto funguje, problém byl v 0xC7
     this->send_command_(0x22);
     this->send_data_(0xF7);
     this->send_command_(0x20);
@@ -276,15 +261,32 @@ void GDEY042Z98::loop() {
       // Čekej 100ms na stabilizaci napájení – neblokuje!
       if (millis() - this->state_start_ms_ < 100)
         return;
-      // Napájení stabilní – inicializuj a pošli data
+      // Napájení stabilní – HW reset + SW reset, pak čekáme na BUSY LOW
       this->initialize_display_();
+      this->refresh_state_ = RefreshState::INITIALIZING;
+      this->state_start_ms_ = millis();
+      return;
+
+    case RefreshState::INITIALIZING:
+      // Čekej až displej dokončí SW reset (BUSY LOW), max 1s
+      if (this->busy_pin_ != nullptr && this->busy_pin_->digital_read()) {
+        if (millis() - this->state_start_ms_ > 1000) {
+          ESP_LOGW(TAG, "Timeout čekání na SW reset, pokračuji...");
+        } else {
+          return;  // stále zaneprázdněn po SW resetu
+        }
+      } else if (millis() - this->state_start_ms_ < 15) {
+        return;  // bez BUSY pinu čekáme aspoň 15ms
+      }
+      // Displej připraven – dokonfiguruj a pošli data
+      this->configure_display_();
       this->do_send_();
       this->refresh_state_ = RefreshState::WAITING;
       this->state_start_ms_ = millis();
       return;
 
     case RefreshState::WAITING: {
-      uint32_t timeout = (this->refresh_type_ == RefreshType::PARTIAL) ? 5000 : 30000;
+      uint32_t timeout = (this->refresh_type_ == RefreshType::PARTIAL) ? 15000 : 30000;
 
       if (this->busy_pin_ == nullptr) {
         if (millis() - this->state_start_ms_ > timeout) {

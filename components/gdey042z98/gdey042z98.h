@@ -12,9 +12,10 @@ static const uint16_t GDEY042Z98_HEIGHT = 300;
 
 enum class RefreshState {
   IDLE,
-  POWERING_ON,   // čekáme na stabilizaci napájení (100ms)
-  SENDING,       // přenášíme data a spouštíme refresh
-  WAITING,       // čekáme na BUSY LOW
+  POWERING_ON,    // čekáme na stabilizaci napájení (100ms)
+  INITIALIZING,   // čekáme až BUSY půjde LOW po SW resetu
+  SENDING,        // přenášíme data a spouštíme refresh
+  WAITING,        // čekáme na BUSY LOW po refreshi
 };
 
 enum class RefreshType {
@@ -48,6 +49,7 @@ class GDEY042Z98 : public display::DisplayBuffer,
   void draw_absolute_pixel_internal(int x, int y, Color color) override;
 
   void initialize_display_();
+  void configure_display_();
   void send_command_(uint8_t cmd);
   void send_data_(uint8_t data);
   void hw_reset_();
