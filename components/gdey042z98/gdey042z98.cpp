@@ -147,7 +147,7 @@ void GDEY042Z98::do_send_() {
 
     // Partial B/W refresh
     this->send_command_(0x22);
-    this->send_data_(0xC7);
+    this->send_data_(0xF4);  // display only, bez LUT načítání
     this->send_command_(0x20);
     ESP_LOGD(TAG, "Partial refresh spuštěn (x=%d y=%d w=%d h=%d)...",
              x, y, w, h);
