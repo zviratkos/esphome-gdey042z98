@@ -2,16 +2,15 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import pins
 from esphome.components import display, spi
-CONF_POWER_PIN = "power_pin"
 from esphome.const import (
     CONF_DC_PIN,
     CONF_RESET_PIN,
     CONF_BUSY_PIN,
     CONF_ID,
     CONF_LAMBDA,
-    CONF_UPDATE_INTERVAL,
-    CONF_PAGES,
 )
+
+CONF_POWER_PIN = "power_pin"
 
 DEPENDENCIES = ["spi"]
 AUTO_LOAD = ["display"]
@@ -34,7 +33,7 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_POWER_PIN): pins.gpio_output_pin_schema,
         }
     )
-    .extend(cv.polling_component_schema("1s"))
+    .extend(cv.polling_component_schema("60s"))
     .extend(spi.spi_device_schema(cs_pin_required=True))
 )
 
