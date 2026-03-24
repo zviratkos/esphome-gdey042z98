@@ -25,16 +25,6 @@ void GDEY042Z98::send_data_(uint8_t data) {
   this->disable();
 }
 
-void GDEY042Z98::hw_reset_() {
-  if (this->reset_pin_ == nullptr) return;
-  this->reset_pin_->digital_write(true);
-  delay(10);
-  this->reset_pin_->digital_write(false);
-  delay(10);
-  this->reset_pin_->digital_write(true);
-  delay(10);
-}
-
 // ---------------------------------------------------------------------------
 // set_partial_ram_area_
 // ---------------------------------------------------------------------------
@@ -62,25 +52,6 @@ void GDEY042Z98::set_partial_ram_area_(uint16_t x, uint16_t y, uint16_t w, uint1
 // Obsahuje delay(10) – volat pouze z POWERING_ON stavu v loop()
 // kde už víme že napájení je stabilní
 // ---------------------------------------------------------------------------
-
-void GDEY042Z98::initialize_display_() {
-  // Pouze HW reset + SW reset – zbytek konfigurace až po BUSY LOW v loop()
-  this->hw_reset_();
-  this->send_command_(0x12);  // SW reset – displej bude BUSY HIGH po dobu resetu
-}
-
-void GDEY042Z98::configure_display_() {
-  // Konfigurace po SW resetu – volat až když BUSY LOW
-  this->send_command_(0x01);
-  this->send_data_((GDEY042Z98_HEIGHT - 1) % 256);
-  this->send_data_((GDEY042Z98_HEIGHT - 1) / 256);
-  this->send_data_(0x00);
-  this->send_command_(0x3C);
-  this->send_data_(0x05);
-  this->send_command_(0x18);
-  this->send_data_(0x80);
-  this->set_partial_ram_area_(0, 0, GDEY042Z98_WIDTH, GDEY042Z98_HEIGHT);
-}
 
 // ---------------------------------------------------------------------------
 // do_send_() – přenos dat do RAM displeje a spuštění refreshe
@@ -244,7 +215,6 @@ void GDEY042Z98::partial_update(uint16_t x, uint16_t y, uint16_t w, uint16_t h) 
   this->partial_w_ = w;
   this->partial_h_ = h;
 
-  // Zapnout napájení – zbytek řeší loop()
   if (this->power_pin_ != nullptr)
     this->power_pin_->digital_write(true);
 
@@ -263,28 +233,60 @@ void GDEY042Z98::loop() {
       return;
 
     case RefreshState::POWERING_ON:
-      // Čekej 100ms na stabilizaci napájení – neblokuje!
-      if (millis() - this->state_start_ms_ < 100)
-        return;
-      // Napájení stabilní – HW reset + SW reset, pak čekáme na BUSY LOW
-      this->initialize_display_();
-      this->refresh_state_ = RefreshState::INITIALIZING;
+      if (millis() - this->state_start_ms_ < 100) return;
+      // RST HIGH
+      if (this->reset_pin_ != nullptr) this->reset_pin_->digital_write(true);
+      this->refresh_state_ = RefreshState::RESET_HIGH;
       this->state_start_ms_ = millis();
       return;
 
-    case RefreshState::INITIALIZING:
-      // Čekej až displej dokončí SW reset (BUSY LOW), max 1s
+    case RefreshState::RESET_HIGH:
+      if (millis() - this->state_start_ms_ < 10) return;
+      // RST LOW
+      if (this->reset_pin_ != nullptr) this->reset_pin_->digital_write(false);
+      this->refresh_state_ = RefreshState::RESET_LOW;
+      this->state_start_ms_ = millis();
+      return;
+
+    case RefreshState::RESET_LOW:
+      if (millis() - this->state_start_ms_ < 10) return;
+      // RST HIGH + SW reset
+      if (this->reset_pin_ != nullptr) this->reset_pin_->digital_write(true);
+      this->refresh_state_ = RefreshState::RESET_HIGH2;
+      this->state_start_ms_ = millis();
+      return;
+
+    case RefreshState::RESET_HIGH2:
+      if (millis() - this->state_start_ms_ < 10) return;
+      // SW reset
+      this->send_command_(0x12);
+      this->refresh_state_ = RefreshState::SW_RESETTING;
+      this->state_start_ms_ = millis();
+      return;
+
+    case RefreshState::SW_RESETTING:
+      // Čekej na BUSY LOW po SW resetu, nebo aspoň 15ms
       if (this->busy_pin_ != nullptr && this->busy_pin_->digital_read()) {
-        if (millis() - this->state_start_ms_ > 1000) {
-          ESP_LOGW(TAG, "Timeout čekání na SW reset, pokračuji...");
-        } else {
-          return;  // stále zaneprázdněn po SW resetu
-        }
+        if (millis() - this->state_start_ms_ < 1000) return;
+        ESP_LOGW(TAG, "Timeout SW reset, pokračuji...");
       } else if (millis() - this->state_start_ms_ < 15) {
-        return;  // bez BUSY pinu čekáme aspoň 15ms
+        return;
       }
-      // Displej připraven – dokonfiguruj a pošli data
-      this->configure_display_();
+      // Konfigurace displeje
+      this->send_command_(0x01);
+      this->send_data_((GDEY042Z98_HEIGHT - 1) % 256);
+      this->send_data_((GDEY042Z98_HEIGHT - 1) / 256);
+      this->send_data_(0x00);
+      this->send_command_(0x3C);
+      this->send_data_(0x05);
+      this->send_command_(0x18);
+      this->send_data_(0x80);
+      this->set_partial_ram_area_(0, 0, GDEY042Z98_WIDTH, GDEY042Z98_HEIGHT);
+      this->refresh_state_ = RefreshState::SENDING;
+      this->state_start_ms_ = millis();
+      return;
+
+    case RefreshState::SENDING:
       this->do_send_();
       this->refresh_state_ = RefreshState::WAITING;
       this->state_start_ms_ = millis();
